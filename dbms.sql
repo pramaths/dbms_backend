@@ -1,3 +1,9 @@
+
+CREATE TABLE IF NOT EXISTS test_table (
+  id INT PRIMARY KEY,
+  message VARCHAR(255) NOT NULL
+);
+
 -- Students Table
 CREATE TABLE Students (
     id INT PRIMARY KEY AUTO_INCREMENT,

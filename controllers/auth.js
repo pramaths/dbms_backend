@@ -1,7 +1,9 @@
-const User = require("../models/user");
 const ErrorResponse = require("../utils/errorResponse");
 const crypto = require("crypto");
+const bcrypt = require('bcryptjs');
+const pool = require('../config/db');
 const sendMail = require("../utils/mailer");
+const jwt = require('jsonwebtoken');
 const winston = require('winston');
 const logger = winston.createLogger({
   level: 'info', 
@@ -12,7 +14,7 @@ const logger = winston.createLogger({
   ],
 });
 const sendVerificationEmail = async (email, verificationToken,next) => {
-  const verificationLink = `https://localhost:8000/api/verifyEmail/${verificationToken}`;
+  const verificationLink = `http://localhost:8000/api/verifyEmail/${verificationToken}`;
 
   const mailOptions = {
     from: "testaccout33@gmail.com",
@@ -31,18 +33,43 @@ const sendVerificationEmail = async (email, verificationToken,next) => {
 }}
 exports.signup = async (req, res, next) => {
     const { username, name, password, email, phone_number } = req.body;
-    const userExistQuery = 'SELECT email FROM Students WHERE email = ? LIMIT 1';
+    const userExistQuery = 'SELECT email, is_verified FROM Students WHERE email = ?  LIMIT 1';
+    const hashedPassword = await bcrypt.hash(password, 12); 
     pool.query(userExistQuery, [email], async (error, results) => {
       if (error) {
         return next(new ErrorResponse("Database error", 500));
       }
       if (results.length > 0) {
-        return next(new ErrorResponse("E-mail already exists", 400));
+        const user = results[0];
+  
+        if (user.is_verified) {
+          return next(new ErrorResponse("E-mail already exists and is verified", 400));
+        } else {
+          const verificationToken = crypto.randomBytes(12).toString("hex");
+          logger.info("Generated verification token:", verificationToken);
+          const updateUserQuery = 'UPDATE Students SET username = ?, name = ?, password = ?, phone_number = ?, verification_token = ? WHERE email = ?';
+          pool.query(updateUserQuery, [username, name, hashedPassword, phone_number, verificationToken, email], async (error, results) => {
+            if (error) {
+              logger.error("error is in signup", error);
+              return next(new ErrorResponse("Failed to update user", 500));
+            }
+  
+            await sendVerificationEmail(email, verificationToken).catch(err => {
+              logger.error("Error sending verification email:", err);
+              next(new ErrorResponse("Failed to send verification email", 500));
+            });
+  
+            res.status(201).json({
+              success: true,
+              data: "Verification email resent to unverified user."
+            });
+          });
+        }
       } else {
-        const verificationToken = crypto.randomBytes(20).toString("hex");
+        const verificationToken = crypto.randomBytes(12).toString("hex");
         logger.info("Generated verification token:", verificationToken);
         const createUserQuery = 'INSERT INTO Students (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
-        pool.query(createUserQuery, [username, name, password, email, phone_number, verificationToken], async (error, results) => {
+        pool.query(createUserQuery, [username, name, hashedPassword, email, phone_number, verificationToken], async (error, results) => {
           if (error) {
             logger.error("error is in signup", error);
             return next(new ErrorResponse("Failed to create user", 500));
@@ -66,7 +93,7 @@ exports.verifyEmail = async (req, res, next) => {
 
     const { verificationToken } = req.params; 
 
-    const verifyUserQuery = 'UPDATE Students SET is_verified = 1, verification_token = NULL WHERE verification_token = ?';
+    const verifyUserQuery = 'UPDATE Students SET is_verified = TRUE, verification_token = NULL WHERE verification_token = ?';
     pool.query(verifyUserQuery, [verificationToken], function (error, results) {
         if (error) {
           return next(new ErrorResponse("Database error", 500));
@@ -106,23 +133,34 @@ exports.signin = async (req, res, next) => {
     if (!isMatched) {
       return next(new ErrorResponse("Invalid credentials", 400));
     }
-
-    // Assuming you have a generateToken function that handles token creation
     generateToken(user, 200, res);
   });
 };
+const generateToken = (user, statusCode, res) => {
+    const payload = {
+        id: user.id,
+        username: user.username
+    };
+  
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+        expiresIn: '180d' // 6 months
+    });
+  
+    // Set token to cookie
+    const cookieOptions = {
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000 * 6), 
+        httpOnly: true 
+    };
 
-const generateToken = async (user, statusCode, res) => {
-  const token = await user.jwtGenerateToken();
-
-  const options = {
-    httpOnly: true,
-    expires: new Date(Date.now() + 365*100*24*60*60*1000),
-  };
-  res
-    .status(statusCode)
-    .cookie("token", token, options)
-    .json({ success: true, token,user});
+    if (process.env.NODE_ENV === 'production') {
+        cookieOptions.secure = true; 
+        cookieOptions.sameSite = 'none'; 
+    }
+    res.cookie('token', token, cookieOptions);
+    res.status(statusCode).json({
+        success: true,
+        token
+    });
 };
 
 exports.logout = (req, res, next) => {
