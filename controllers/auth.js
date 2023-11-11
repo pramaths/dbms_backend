@@ -33,8 +33,18 @@ const sendVerificationEmail = async (email, verificationToken,next) => {
 }}
 exports.signup = async (req, res, next) => {
     const { username, name, password, email, phone_number } = req.body;
-    const userExistQuery = 'SELECT email, is_verified FROM Students WHERE email = ?  LIMIT 1';
-    const hashedPassword = await bcrypt.hash(password, 12); 
+
+    let userExistQuery, createUserQuery;
+    if (role === 'Student') {
+      userExistQuery = 'SELECT email, is_verified FROM Students WHERE email = ? LIMIT 1';
+      createUserQuery = 'INSERT INTO Students (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
+    } else if (role === 'Developer') {
+      userExistQuery = 'SELECT email, is_verified FROM Developers WHERE email = ? LIMIT 1';
+      createUserQuery = 'INSERT INTO Developers (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
+    } else {
+      return next(new ErrorResponse("Invalid role specified", 400));
+    }
+        const hashedPassword = await bcrypt.hash(password, 12); 
     pool.query(userExistQuery, [email], async (error, results) => {
       if (error) {
         return next(new ErrorResponse("Database error", 500));
@@ -139,7 +149,8 @@ exports.signin = async (req, res, next) => {
 const generateToken = (user, statusCode, res) => {
     const payload = {
         id: user.id,
-        username: user.username
+        username: user.username,
+        email:user.email
     };
   
     const token = jwt.sign(payload, process.env.JWT_SECRET, {

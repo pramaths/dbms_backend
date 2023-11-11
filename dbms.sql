@@ -43,7 +43,7 @@ CREATE TABLE Projects (
     student_id INT NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
-    status ENUM('Open', 'In Progress', 'Completed') DEFAULT 'Open',
+    status ENUM('Open', 'Alloted_to_dev', 'Completed') DEFAULT 'Open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES Students(id)
 );
@@ -126,3 +126,7 @@ ADD COLUMN verification_token VARCHAR(255),
 ADD COLUMN is_verified BOOLEAN DEFAULT FALSE,
 ADD COLUMN reset_password_token VARCHAR(255),
 ADD COLUMN reset_password_expires DATETIME;
+
+ALTER TABLE Projects
+ADD COLUMN requirements TEXT,
+ADD COLUMN deadline DATETIME;
