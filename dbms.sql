@@ -43,7 +43,7 @@ CREATE TABLE Projects (
     student_id INT NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
-    status ENUM('Open', 'Alloted_to_dev', 'Completed') DEFAULT 'Open',
+    status ENUM('Open', 'In Progress', 'Completed') DEFAULT 'Open',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES Students(id)
 );
@@ -92,7 +92,7 @@ CREATE TABLE Conversations (
 CREATE TABLE Messages (
     id INT PRIMARY KEY AUTO_INCREMENT,
     conversation_id INT NOT NULL,
-    sender_id INT NOT NULL,  -- Note: You might need to manage sender type (Student/Developer) if needed
+    sender_id INT NOT NULL,  
     message_text TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (conversation_id) REFERENCES Conversations(id)
@@ -121,6 +121,9 @@ ADD COLUMN is_verified BOOLEAN DEFAULT FALSE,
 ADD COLUMN reset_password_token VARCHAR(255),
 ADD COLUMN reset_password_expires DATETIME;
 
+ALTER TABLE Students
+DROP COLUMN name;
+
 ALTER TABLE Developers
 ADD COLUMN verification_token VARCHAR(255),
 ADD COLUMN is_verified BOOLEAN DEFAULT FALSE,
@@ -130,3 +133,76 @@ ADD COLUMN reset_password_expires DATETIME;
 ALTER TABLE Projects
 ADD COLUMN requirements TEXT,
 ADD COLUMN deadline DATETIME;
+
+
+ALTER TABLE Students DROP INDEX name;
+ALTER TABLE Developers ADD COLUMN name VARCHAR(255) NOT NULL;
+
+ALTER TABLE Projects
+ADD COLUMN price DECIMAL(10, 2);
+
+
+ALTER TABLE Projects
+ADD COLUMN due DATETIME;
+
+ALTER TABLE Students 
+MODIFY image_url VARCHAR(255);
+
+ALTER TABLE Developers 
+CHANGE image_path image_url VARCHAR(255);
+
+DELIMITER //
+CREATE TRIGGER after_student_signup
+BEFORE INSERT ON Students
+FOR EACH ROW
+BEGIN
+  IF NEW.image_url IS NULL OR NEW.image_url = '' THEN
+    SET NEW.image_url = '/Images/default.jpg';
+  END IF;
+END;
+//
+DELIMITER ;
+
+DELIMITER //
+CREATE TRIGGER after_developer_signup
+BEFORE INSERT ON Developers
+FOR EACH ROW
+BEGIN
+  IF NEW.image_url IS NULL OR NEW.image_url = '' THEN
+    SET NEW.image_url = '/Images/default.jpg';
+  END IF;
+END;
+//
+DELIMITER ;
+
+
+DELIMITER //
+CREATE PROCEDURE AcceptProposal(IN proposal_id INT, IN project_id INT)
+BEGIN
+    DECLARE current_status ENUM('Open', 'In Progress', 'Completed');
+
+    SELECT status INTO current_status FROM Projects WHERE id = project_id;
+    
+    IF current_status = 'Open' THEN
+        UPDATE Proposals SET status = 'Accepted' WHERE id = proposal_id;
+        UPDATE Proposals SET status = 'Rejected' WHERE project_id = project_id AND id != proposal_id;
+        UPDATE Projects SET status = 'In Progress' WHERE id = project_id;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'This project already has an accepted proposal or is not open';
+    END IF;
+END;
+//
+DELIMITER ;
+
+
+CREATE TABLE Payments (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    project_id INT,
+    payer_id INT, 
+    amount DECIMAL(10, 2),
+    status ENUM('Held', 'Released', 'Refunded'),
+    mangopay_payin_id VARCHAR(255), 
+    mangopay_payout_id VARCHAR(255), 
+    FOREIGN KEY (project_id) REFERENCES Projects(id),
+    FOREIGN KEY (payer_id) REFERENCES Students(id)
+);

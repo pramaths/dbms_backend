@@ -13,11 +13,12 @@ const logger = winston.createLogger({
     new winston.transports.File({ filename: 'logfile.log' }),
   ],
 });
-const sendVerificationEmail = async (email, verificationToken,next) => {
+
+const sendVerificationEmail = async (email, verificationToken, next) => {
   const verificationLink = `http://localhost:8000/api/verifyEmail/${verificationToken}`;
 
   const mailOptions = {
-    from: "testaccout33@gmail.com",
+    from: "testaccount33@gmail.com",
     to: email,
     subject: "Account Verification",
     text: `Please click the following link to verify your email: ${verificationLink}`,
@@ -27,137 +28,136 @@ const sendVerificationEmail = async (email, verificationToken,next) => {
     logger.info("Verification email sent successfully");
   } catch (error) {
     logger.error("Error sending verification email:", error);
-  
     next(new Error("Failed to send verification email"));
-  
-}}
+  }
+};
 exports.signup = async (req, res, next) => {
-    const { username, name, password, email, phone_number } = req.body;
+  const { username, password, email, phone_number, role } = req.body;
 
-    let userExistQuery, createUserQuery;
-    if (role === 'Student') {
-      userExistQuery = 'SELECT email, is_verified FROM Students WHERE email = ? LIMIT 1';
-      createUserQuery = 'INSERT INTO Students (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
-    } else if (role === 'Developer') {
-      userExistQuery = 'SELECT email, is_verified FROM Developers WHERE email = ? LIMIT 1';
-      createUserQuery = 'INSERT INTO Developers (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
-    } else {
+  if (!['Student', 'Developer'].includes(role)) {
       return next(new ErrorResponse("Invalid role specified", 400));
-    }
-        const hashedPassword = await bcrypt.hash(password, 12); 
-    pool.query(userExistQuery, [email], async (error, results) => {
-      if (error) {
-        return next(new ErrorResponse("Database error", 500));
-      }
-      if (results.length > 0) {
-        const user = results[0];
-  
-        if (user.is_verified) {
-          return next(new ErrorResponse("E-mail already exists and is verified", 400));
-        } else {
-          const verificationToken = crypto.randomBytes(12).toString("hex");
-          logger.info("Generated verification token:", verificationToken);
-          const updateUserQuery = 'UPDATE Students SET username = ?, name = ?, password = ?, phone_number = ?, verification_token = ? WHERE email = ?';
-          pool.query(updateUserQuery, [username, name, hashedPassword, phone_number, verificationToken, email], async (error, results) => {
-            if (error) {
-              logger.error("error is in signup", error);
-              return next(new ErrorResponse("Failed to update user", 500));
-            }
-  
-            await sendVerificationEmail(email, verificationToken).catch(err => {
-              logger.error("Error sending verification email:", err);
-              next(new ErrorResponse("Failed to send verification email", 500));
-            });
-  
-            res.status(201).json({
-              success: true,
-              data: "Verification email resent to unverified user."
-            });
-          });
-        }
-      } else {
-        const verificationToken = crypto.randomBytes(12).toString("hex");
-        logger.info("Generated verification token:", verificationToken);
-        const createUserQuery = 'INSERT INTO Students (username, name, password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?, ?)';
-        pool.query(createUserQuery, [username, name, hashedPassword, email, phone_number, verificationToken], async (error, results) => {
-          if (error) {
-            logger.error("error is in signup", error);
-            return next(new ErrorResponse("Failed to create user", 500));
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+  const verificationToken = crypto.randomBytes(12).toString("hex");
+
+  let userExistQuery = `SELECT email, is_verified FROM ${role}s WHERE email = ? LIMIT 1`;
+  let createUserQuery = `INSERT INTO ${role}s (username,password, email, phone_number, verification_token) VALUES (?, ?, ?, ?, ?)`;
+  let updateUserQuery = `UPDATE ${role}s SET username = ?, password = ?, phone_number = ?, verification_token = ? WHERE email = ?`;
+
+  try {
+      const [existingUsers] = await pool.query(userExistQuery, [email]);
+      if (existingUsers.length > 0) {
+          const user = existingUsers[0];
+          if (user.is_verified) {
+              return next(new ErrorResponse("E-mail already exists and is verified", 400));
           }
-          await sendVerificationEmail(email, verificationToken).catch(err => {
-            logger.error("Error sending verification email:", err);
-            next(new ErrorResponse("Failed to send verification email", 500));
+
+          await pool.query(updateUserQuery, [username, hashedPassword, phone_number, verificationToken, email]);
+          await sendVerificationEmail(email, verificationToken);
+          return res.status(201).json({
+              success: true,
+              message: "Verification email resent to unverified user."
           });
-  
-          res.status(201).json({
-            success: true,
-            data: "User registered, verification email sent."
-          });
-        });
       }
-    });
-  };
-  
+
+      await pool.query(createUserQuery, [username,hashedPassword, email, phone_number, verificationToken]);
+      await sendVerificationEmail(email, verificationToken);
+
+      res.status(201).json({
+          success: true,
+          message: "User registered, verification email sent."
+      });
+  } catch (error) {
+      logger.error("Signup error:", error);
+      return next(new ErrorResponse("Database error", 500));
+  }
+};
+
+
 
 exports.verifyEmail = async (req, res, next) => {
+  const { verificationToken } = req.params;
 
-    const { verificationToken } = req.params; 
+  try {
+      let verifyUserQuery = 'UPDATE Students SET is_verified = TRUE, verification_token = NULL WHERE verification_token = ?';
+      let [results] = await pool.query(verifyUserQuery, [verificationToken]);
 
-    const verifyUserQuery = 'UPDATE Students SET is_verified = TRUE, verification_token = NULL WHERE verification_token = ?';
-    pool.query(verifyUserQuery, [verificationToken], function (error, results) {
-        if (error) {
-          return next(new ErrorResponse("Database error", 500));
-        }
-        if (results.affectedRows === 0) {
-          return next(new ErrorResponse("Invalid verification token", 400));
-        } else {
-          res.status(200).json({
-            success: true,
-            message: "Email verified successfully",
-          });
-        }
-      });
-    };
-exports.signin = async (req, res, next) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return next(new ErrorResponse("E-mail and password are required", 400));
-    }
+      if (results.affectedRows === 0) {
+          verifyUserQuery = 'UPDATE Developers SET is_verified = TRUE, verification_token = NULL WHERE verification_token = ?';
+          [results] = await pool.query(verifyUserQuery, [verificationToken]);
 
-    const findUserQuery = 'SELECT * FROM Students WHERE email = ?';   
-    
-  pool.query(findUserQuery, [email], async (error, results) => {
-    if (error) {
+          if (results.affectedRows === 0) {
+              return next(new ErrorResponse("Invalid verification token", 400));
+          }
+      }
+      // res.status(200).json({
+      //     success: true,
+      //     message: "Email verified successfully"
+      // });
+      res.redirect('http://localhost:3000/login');
+  } catch (error) {
+      console.error("Database error:", error);
       return next(new ErrorResponse("Database error", 500));
-    }
-    const user = results[0];
-    if (!user) {
-      return next(new ErrorResponse("Invalid credentials", 400));
-    }
-
-    if (!user.is_verified) {
-      return next(new ErrorResponse("Email is not verified", 400));
-    }
-
-    const isMatched = await bcrypt.compare(password, user.password);
-    if (!isMatched) {
-      return next(new ErrorResponse("Invalid credentials", 400));
-    }
-    generateToken(user, 200, res);
-  });
+  }
 };
-const generateToken = (user, statusCode, res) => {
+
+
+exports.signin = async (req, res, next) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+      return next(new ErrorResponse("E-mail and password are required", 400));
+  }
+
+  try {
+      // First, try to find the user in the Students table
+      let findUserQuery = 'SELECT * FROM Students WHERE email = ?';
+      let [users] = await pool.query(findUserQuery, [email]);
+      let role = 'Student';
+
+      // If not found in Students, try the Developers table
+      if (users.length === 0) {
+          findUserQuery = 'SELECT * FROM Developers WHERE email = ?';
+          [users] = await pool.query(findUserQuery, [email]);
+          role = 'Developer';
+      }
+
+      // Check if user is found
+      if (users.length === 0) {
+          return next(new ErrorResponse("Invalid credentials", 400));
+      }
+
+      const user = users[0];
+
+      if (!user.is_verified) {
+          return next(new ErrorResponse("Email is not verified", 400));
+      }
+
+      const isMatched = await bcrypt.compare(password, user.password);
+      if (!isMatched) {
+          return next(new ErrorResponse("Invalid credentials", 400));
+      }
+
+      generateToken(user, role, 200, res);
+  } catch (error) {
+      console.error("Database error:", error);
+      return next(new ErrorResponse("Database error", 500));
+  }
+};
+
+const generateToken = (user,role,statusCode, res) => {
     const payload = {
         id: user.id,
         username: user.username,
-        email:user.email
+        email:user.email,
+        role:role
     };
   
     const token = jwt.sign(payload, process.env.JWT_SECRET, {
         expiresIn: '180d' // 6 months
     });
   
-    // Set token to cookie
     const cookieOptions = {
         expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000 * 6), 
         httpOnly: true 
@@ -181,117 +181,121 @@ exports.logout = (req, res, next) => {
     message: "Logged out",
   });
 };
-
 exports.forgotPassword = async (req, res, next) => {
-    const { email } = req.body;
-    const findUserQuery = 'SELECT * FROM Students WHERE email = ?';
-  
-    pool.query(findUserQuery, [email], async (error, results) => {
-      if (error) {
-        return next(new ErrorResponse("Database error", 500));
+  const { email } = req.body;
+
+  try {
+      // Check in Students table
+      let resetPasswordQuery = 'SELECT * FROM Students WHERE email = ?';
+      let [users] = await pool.query(resetPasswordQuery, [email]);
+      let updateUserQuery = 'UPDATE Students SET reset_password_token = ?, reset_password_expire = ? WHERE email = ?';
+
+      // If not found, check in Developers table
+      if (users.length === 0) {
+          resetPasswordQuery = 'SELECT * FROM Developers WHERE email = ?';
+          [users] = await pool.query(resetPasswordQuery, [email]);
+          updateUserQuery = 'UPDATE Developers SET reset_password_token = ?, reset_password_expire = ? WHERE email = ?';
       }
-  
-      const user = results[0];
-      if (!user) {
-        return next(new ErrorResponse("User not found", 404));
+
+      if (users.length === 0) {
+          return next(new ErrorResponse("User not found", 404));
       }
-  
+
       const resetToken = crypto.randomBytes(20).toString("hex");
-  
       const hashedResetToken = await bcrypt.hash(resetToken, 12);
-  
-      const resetPasswordQuery = 'UPDATE Students SET reset_password_token = ?, reset_password_expire = ? WHERE email = ?';
-      const expireTime = new Date(Date.now() + 3600000); 
-  
-      pool.query(resetPasswordQuery, [hashedResetToken, expireTime, email], async (error, results) => {
-        if (error) {
-          return next(new ErrorResponse("Database error", 500));
-        }
-  
-        const resetUrl = `http://localhost:3000/resetpassword/${resetToken}`;
-        const mailOptions = {
-          from: "testaccout33@gmail.com",
+      const expireTime = new Date(Date.now() + 3600000); // 1 hour from now
+
+      await pool.query(updateUserQuery, [hashedResetToken, expireTime, email]);
+
+      // Send reset password email
+      const resetUrl = `http://localhost:3000/resetpassword/${resetToken}`;
+      const mailOptions = {
+          from: "testaccount33@gmail.com",
           to: email,
           subject: "Password Reset Request",
           text: `Please click the following link to reset your password: ${resetUrl}`,
-        };
-  
-        await sendMail(mailOptions);
-        res.status(200).json({
+      };
+
+      await sendMail(mailOptions);
+      res.status(200).json({
           success: true,
           message: "Password reset email sent",
-        });
       });
-    });
-  };
-  exports.resetPassword = async (req, res, next) => {
-    const { resetToken } = req.params;
-    const { password } = req.body;
-  
-    // Again, hash the token to check against the database
-    const hashedResetToken = await bcrypt.hash(resetToken, 12);
-  
-    const findUserQuery = 'SELECT * FROM Students WHERE reset_password_token = ? AND reset_password_expire > NOW()';
-    
-    pool.query(findUserQuery, [hashedResetToken], async (error, results) => {
-      if (error) {
-        return next(new ErrorResponse("Database error", 500));
-      }
-  
-      const user = results[0];
-      if (!user) {
-        return next(new ErrorResponse("Invalid or expired reset token", 400));
-      }
-  
-      const hashedPassword = await bcrypt.hash(password, 12);
-  
-      const resetPasswordQuery = 'UPDATE Students SET password = ?, reset_password_token = NULL, reset_password_expire = NULL WHERE email = ?';
+  } catch (error) {
+      console.error("Forgot password error:", error);
+      return next(new ErrorResponse("Database error", 500));
+  }
+};
+exports.resetPassword = async (req, res, next) => {
+  const { resetToken } = req.params;
+  const { password } = req.body;
+
+  try {
+      const hashedResetToken = await bcrypt.hash(resetToken, 12);
       
-      pool.query(resetPasswordQuery, [hashedPassword, user.email], (error, results) => {
-        if (error) {
-          return next(new ErrorResponse("Database error", 500));
-        }
-        res.status(200).json({
+      let resetPasswordQuery = 'SELECT * FROM Students WHERE reset_password_token = ? AND reset_password_expire > NOW()';
+      let [users] = await pool.query(resetPasswordQuery, [hashedResetToken]);
+
+      let updateUserQuery = 'UPDATE Students SET password = ?, reset_password_token = NULL, reset_password_expire = NULL WHERE email = ?';
+
+      if (users.length === 0) {
+          resetPasswordQuery = 'SELECT * FROM Developers WHERE reset_password_token = ? AND reset_password_expire > NOW()';
+          [users] = await pool.query(resetPasswordQuery, [hashedResetToken]);
+
+          updateUserQuery = 'UPDATE Developers SET password = ?, reset_password_token = NULL, reset_password_expire = NULL WHERE email = ?';
+
+          if (users.length === 0) {
+              return next(new ErrorResponse("Invalid or expired reset token", 400));
+          }
+      }
+
+      const user = users[0];
+      const hashedPassword = await bcrypt.hash(password, 12);
+      await pool.query(updateUserQuery, [hashedPassword, user.email]);
+
+      res.status(200).json({
           success: true,
           message: "Password reset successfully",
-        });
       });
-    });
-  };
+  } catch (error) {
+      console.error("Reset password error:", error);
+      return next(new ErrorResponse("Database error", 500));
+  }
+};
 
-
-  
-exports.changePassword = async (req, res, next) => {
+  exports.changePassword = async (req, res, next) => {
     const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id; 
-    const findUserQuery = 'SELECT password FROM Students WHERE id = ?';
-  
-    pool.query(findUserQuery, [userId], async (error, results) => {
-      if (error) {
-        return next(new ErrorResponse("Database error", 500));
-      }
-  
-      const user = results[0];
-      if (!user) {
-        return next(new ErrorResponse("User not found", 404));
-      }
-  
-      const isMatched = await bcrypt.compare(currentPassword, user.password);
-      if (!isMatched) {
-        return next(new ErrorResponse("Current password is incorrect", 400));
-      }
-  
-      const hashedNewPassword = await bcrypt.hash(newPassword, 12);
-      const updatePasswordQuery = 'UPDATE Students SET password = ? WHERE id = ?';
-  
-      pool.query(updatePasswordQuery, [hashedNewPassword, userId], (error, results) => {
-        if (error) {
-          return next(new ErrorResponse("Database error", 500));
+    const token = req.cookies.token; // Assuming the token is stored in cookies
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const userId = decoded.id;
+        const userRole = decoded.role; // Extract the role from the token
+
+        const findUserQuery = `SELECT password FROM ${userRole}s WHERE id = ?`;
+        const [users] = await pool.query(findUserQuery, [userId]);
+
+        if (users.length === 0) {
+            return next(new ErrorResponse("User not found", 404));
         }
+
+        const user = users[0];
+        const isMatched = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatched) {
+            return next(new ErrorResponse("Current password is incorrect", 400));
+        }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 12);
+        const updatePasswordQuery = `UPDATE ${userRole}s SET password = ? WHERE id = ?`;
+        await pool.query(updatePasswordQuery, [hashedNewPassword, userId]);
+
         res.status(200).json({ message: 'Password changed successfully' });
-      });
-    });
-  };
+    } catch (error) {
+        console.error("Change password error:", error);
+        return next(new ErrorResponse("Database error", 500));
+    }
+};
+
   
 //   exports.deactivateUser = async (req, res, next) => {
 //     const { id } = req.params;
@@ -322,3 +326,29 @@ exports.changePassword = async (req, res, next) => {
 //     });
 //   };
 
+exports.Userinfo=async(req,res,next)=>{
+    const token = req.cookies.token;
+    console.log("egg",token)
+    if (!token) {
+        return next(new ErrorResponse("No token provided", 401));
+    }
+    console.log(process.env.JWT_SECRET)
+    let decoded
+    try {
+          decoded = jwt.verify(token, process.env.JWT_SECRET);
+        let userId = decoded.id;
+        const userRole = decoded.role; 
+console.log(userId)
+        const findUserQuery = `SELECT * FROM ${userRole}s WHERE id = ?`;
+        const [users] = await pool.query(findUserQuery, [userId]);
+
+        if (users.length === 0) {
+            return next(new ErrorResponse("User not found", 404));
+        }
+
+        res.status(200).json({success:true,users});
+    } catch (error) {
+        console.error("User not found error:", error);
+        return next(new ErrorResponse("error", 500));
+    }
+}
