@@ -200,9 +200,7 @@ CREATE TABLE Payments (
     project_id INT,
     payer_id INT, 
     amount DECIMAL(10, 2),
-    status ENUM('Held', 'Released', 'Refunded'),
-    mangopay_payin_id VARCHAR(255), 
-    mangopay_payout_id VARCHAR(255), 
+    status ENUM('Held', 'Released', 'Refunded'), 
     FOREIGN KEY (project_id) REFERENCES Projects(id),
     FOREIGN KEY (payer_id) REFERENCES Students(id)
 );
